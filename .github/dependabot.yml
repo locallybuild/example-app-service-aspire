@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # .NET dependencies, and the Aspire CLI in .config/dotnet-tools.json. Aspire's
+  # packages, SDK and CLI are grouped so they move to a new release together.
+  - package-ecosystem: "nuget"
+    directories:
+      - "/"
+      - "/app/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      aspire:
+        patterns:
+          - "Aspire.*"
+          - "aspire.cli"
+      locally:
+        patterns:
+          - "Locally.*"
+      nuget:
+        patterns:
+          - "*"
+
+  # GitHub Actions used by the CI
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

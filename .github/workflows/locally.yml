@@ -1,0 +1,101 @@
+# Deploys this example to Locally the same way its README does, then signs the
+# guestbook and waits for the moderator - so a change that stops the example
+# deploying or working fails its PR.
+name: Locally
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: locally-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Locally
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required: Locally signs in using GitHub's OIDC token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build app/AspireExample.slnx
+
+      - uses: locallybuild/setup-locally@v1
+        with:
+          team-uuid: ${{ vars.LOCALLY_TEAM_UUID }}
+          plugins: custom
+          plugins-list: |
+            Microsoft.Cache
+            Microsoft.ContainerRegistry
+            Microsoft.Insights
+            Microsoft.OperationalInsights
+            Microsoft.Storage
+            Microsoft.Web
+
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          dotnet tool restore
+          apphost=app/AppHost/AppHost.csproj
+
+          # The runner's trust store doesn't hold the CA setup-locally
+          # generated, so Docker is told to trust it for the registry. The
+          # registry's name isn't known until it exists, so it's provisioned
+          # first, on its own; `aspire deploy` then does everything else.
+          locally run dotnet aspire do provision-env-acr --apphost "$apphost" --non-interactive
+          registry="$(locally run az acr list --resource-group rg-aspire-apphost --query '[0].loginServer' --output tsv)"
+          sudo mkdir -p "/etc/docker/certs.d/$registry"
+          sudo cp "$LOCALLY_TLS_CA_FILE_PATH" "/etc/docker/certs.d/$registry/ca.crt"
+
+          locally run dotnet aspire deploy --apphost "$apphost" --non-interactive
+
+      - name: Sign the guestbook
+        run: |
+          set -euo pipefail
+          web="https://$(locally run az webapp list --resource-group rg-aspire-apphost \
+            --query "[?starts_with(name, 'web-')].defaultHostName | [0]" --output tsv)"
+          call() { curl --silent --show-error --fail --cacert "$LOCALLY_TLS_CA_FILE_PATH" "$@"; }
+
+          # The apps can take a little while to come up once deployed.
+          for _ in $(seq 60); do
+            call --output /dev/null "$web/" 2>/dev/null && break
+            sleep 5
+          done
+
+          sign() {
+            call --header 'Content-Type: application/json' \
+              --data "$(jq -n --arg message "$1" '{name: "GitHub Actions", message: $message}')" \
+              "$web/api/entries" | jq -r .id
+          }
+          approved="$(sign 'Hello from CI')"
+          rejected="$(sign 'This is spam')"
+
+          # The moderator picks each entry off the queue; the list may be
+          # served from the output cache for up to 30 seconds.
+          for _ in $(seq 36); do
+            entries="$(call "$web/api/entries")"
+            state() { jq -r --arg id "$1" '.entries[] | select(.id == $id) | .state' <<<"$entries"; }
+            echo "approved: $(state "$approved"), rejected: $(state "$rejected")"
+            if [ "$(state "$approved")" = Approved ] && [ "$(state "$rejected")" = Rejected ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::the entries weren't moderated in time"
+          exit 1
+
+      - uses: locallybuild/setup-locally/teardown@v1
+        if: always()
