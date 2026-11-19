@@ -33,6 +33,24 @@ jobs:
       - name: Build
         run: dotnet build app/AspireExample.slnx
 
+      # The containerd image store in the runner's Docker version ignores
+      # /etc/docker/certs.d when fetching a registry's OAuth token, so the push
+      # below fails with "x509: certificate signed by unknown authority" even
+      # though the CA is trusted for the registry itself (moby/moby c2075797).
+      # The classic image store uses the registry's TLS settings for both, so
+      # switch to it. This restarts Docker, so it has to happen before Locally
+      # starts any containers. Remove once the runner image ships Docker
+      # 29.9.0 or later: https://github.com/actions/runner-images/issues/15330
+      - name: Use Docker's classic image store
+        run: |
+          set -euo pipefail
+          config=/etc/docker/daemon.json
+          current="$(sudo cat "$config" 2>/dev/null || echo '{}')"
+          jq '.features["containerd-snapshotter"] = false' <<<"$current" | sudo tee "$config" >/dev/null
+          sudo systemctl restart docker
+          docker version --format 'Docker {{.Server.Version}}'
+          docker info --format 'Storage driver: {{.Driver}}'
+
       - uses: locallybuild/setup-locally@v1
         with:
           team-uuid: ${{ vars.LOCALLY_TEAM_UUID }}
