@@ -115,5 +115,24 @@ jobs:
           echo "::error::the entries weren't moderated in time"
           exit 1
 
+      # The apps' own output doesn't make it into Locally's CI log, so print the
+      # logs of every container Locally started when something fails. Locally
+      # may run them under Docker or Podman, so both are listed.
+      - name: Show container logs
+        if: failure()
+        run: |
+          for runtime in docker podman; do
+            command -v "$runtime" >/dev/null || continue
+            echo "::group::$runtime ps -a"
+            "$runtime" ps -a || true
+            echo "::endgroup::"
+            for id in $("$runtime" ps -aq 2>/dev/null); do
+              name="$("$runtime" inspect --format '{{.Name}}' "$id" 2>/dev/null || echo "$id")"
+              echo "::group::$runtime logs ${name#/}"
+              "$runtime" logs --tail 300 "$id" 2>&1 || true
+              echo "::endgroup::"
+            done
+          done
+
       - uses: locallybuild/setup-locally/teardown@v1
         if: always()
