@@ -51,6 +51,14 @@ jobs:
           docker version --format 'Docker {{.Server.Version}}'
           docker info --format 'Storage driver: {{.Driver}}'
 
+      # The runner has both Docker and Podman, and Locally can switch from one to
+      # the other partway through a run - after which the containers it starts
+      # can't see the images or registry trust set up on the first. So pin it to
+      # Docker. `locally ci` reads this when it starts, so it has to come before
+      # setup-locally.
+      - name: Run containers under Docker
+        run: echo "LOCALLY_CONTAINER_RUNTIME=docker" >> "$GITHUB_ENV"
+
       - uses: locallybuild/setup-locally@v1
         with:
           team-uuid: ${{ vars.LOCALLY_TEAM_UUID }}
