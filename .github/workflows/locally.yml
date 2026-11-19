@@ -116,20 +116,24 @@ jobs:
           exit 1
 
       # The apps' own output doesn't make it into Locally's CI log, so print the
-      # logs of every container Locally started when something fails. Locally
-      # may run them under Docker or Podman, so both are listed.
+      # logs of the containers Locally started when something fails. Locally
+      # may run them under Docker or Podman, so both are listed. Workflow
+      # commands are turned off while the logs print, so nothing in them is
+      # acted on, and these all belong to this job's throwaway Locally instance.
       - name: Show container logs
         if: failure()
         run: |
+          stop="$(uuidgen)"
           for runtime in docker podman; do
             command -v "$runtime" >/dev/null || continue
             echo "::group::$runtime ps -a"
             "$runtime" ps -a || true
             echo "::endgroup::"
-            for id in $("$runtime" ps -aq 2>/dev/null); do
-              name="$("$runtime" inspect --format '{{.Name}}' "$id" 2>/dev/null || echo "$id")"
-              echo "::group::$runtime logs ${name#/}"
-              "$runtime" logs --tail 300 "$id" 2>&1 || true
+            "$runtime" ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^(furnace|locally)-' | while read -r name; do
+              echo "::group::$runtime logs $name"
+              echo "::stop-commands::$stop"
+              "$runtime" logs --tail 300 "$name" 2>&1 || true
+              echo "::$stop::"
               echo "::endgroup::"
             done
           done
